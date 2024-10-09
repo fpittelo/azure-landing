@@ -1,0 +1,51 @@
+name: Deploy Environment
+
+on:
+  pull_request:
+    types:
+      - closed  # Trigger when a pull request is closed (including merged)
+
+permissions:
+  id-token: write  # Required for OIDC authentication
+  contents: read   # Default permission for accessing the repo
+
+jobs:
+  # Step 1: Bootstrap Backend Resources (if not already done)
+  backend:
+    if: github.event.pull_request.merged == true && (github.ref == 'refs/heads/dev' || github.ref == 'refs/heads/qa' || github.ref == 'refs/heads/main')
+    name: Deploy Backend
+    runs-on: ubuntu-latest
+    environment: ${{ github.ref_name }} # Use the branch name as environment
+    outputs:
+      environment: ${{ steps.setenv.outputs.environment }}
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v3
+
+      - name: Set environment based on branch
+        id: setenv
+        run: |
+          if [[ "${{ github.ref }}" == "refs/heads/dev" ]]; then
+            echo "ENVIRONMENT=dev" >> $GITHUB_ENV
+            echo "environment=dev" >> $GITHUB_OUTPUT
+          elif [[ "${{ github.ref }}" == "refs/heads/qa" ]]; then
+            echo "ENVIRONMENT=qa" >> $GITHUB_ENV
+            echo "environment=qa" >> $GITHUB_OUTPUT
+          elif [[ "${{ github.ref }}" == "refs/heads/main" ]]; then
+            echo "ENVIRONMENT=main" >> $GITHUB_ENV
+            echo "environment=main" >> $GITHUB_OUTPUT
+          fi
+
+      - name: Login to Azure using OIDC
+        uses: azure/login@v2
+        with:
+          client-id: ${{ secrets.AZURE_CLIENT_ID }}
+          tenant-id: ${{ secrets.AZURE_TENANT_ID }}
+          subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+          allow-no-subscriptions: false
+          enable-AzPSSession: false
+
+      - name: Set Azure Subscription
+        run: |
+          echo "Setting Azure Subscription to: ${{ secrets.AZURE_SUBSCRIPTION_ID }}"
+          az account set --subscription ${{ secrets.AZURE_SUBSCRIPTION_ID }}
