@@ -1,43 +1,28 @@
-name: Deploy Environment
+name: Destroy Environment
 
 on:
-  push:
-    branches:
-      - dev
-  pull_request:
-    branches:
-      - qa
-      - main
-    types:
-      - closed  # Trigger when a pull request is closed (includes merged)
+  workflow_dispatch:
+    inputs:
+      environment:
+        description: 'Environment to destroy (dev, qa, main)'
+        required: true
+        default: 'dev'
 
 permissions:
   id-token: write  # Required for OIDC authentication
   contents: read   # Default permission for accessing the repo
 
 jobs:
-  backend:
-    name: Deploy Backend
+  destroy:
+    name: Destroy Backend Resources
     runs-on: ubuntu-latest
-    if: |
-      (github.event_name == 'push' && github.ref == 'refs/heads/dev') ||
-      (github.event_name == 'pull_request' && github.event.action == 'closed' && github.event.pull_request.merged == true)
-    environment: ${{ github.event_name == 'push' && 'dev' || github.event_name == 'pull_request' && github.event.pull_request.base.ref }}
+    environment: ${{ github.event.inputs.environment }}  # Use the input environment
     env:
+      ENVIRONMENT: ${{ github.event.inputs.environment }}
       PROJECT_NAME: 'azurelanding'  # Sanitized project name (no hyphens)
     steps:
       - name: Checkout code
         uses: actions/checkout@v3
-
-      - name: Set environment variable
-        id: setenv
-        run: |
-          if [ "${{ github.event_name }}" == "push" ]; then
-            ENVIRONMENT="dev"
-          elif [ "${{ github.event_name }}" == "pull_request" ]; then
-            ENVIRONMENT="${{ github.event.pull_request.base.ref }}"
-          fi
-          echo "ENVIRONMENT=$ENVIRONMENT" >> $GITHUB_ENV
 
       - name: Login to Azure using OIDC
         uses: azure/login@v2
@@ -53,8 +38,10 @@ jobs:
           echo "Setting Azure Subscription to: ${{ secrets.AZURE_SUBSCRIPTION_ID }}"
           az account set --subscription ${{ secrets.AZURE_SUBSCRIPTION_ID }}
 
-      - name: Create backend resources
+      - name: Destroy backend resources
         run: |
+          set -e
+
           # Retrieve environment variables
           environment="${{ env.ENVIRONMENT }}"
           project_name=$(echo "${{ env.PROJECT_NAME }}" | tr '[:upper:]' '[:lower:]' | sed 's/[^a-z0-9]//g')
@@ -81,25 +68,35 @@ jobs:
           echo "Storage Account Name: $az_backend_sa_name"
           echo "Container Name: $az_backend_container_name"
 
-          # Create resource group if it doesn't exist
-          if [ "$(az group exists --name "$az_backend_rg_name")" = "false" ]; then
-            az group create --name "$az_backend_rg_name" --location "$az_location"
+          # Delete storage container if it exists
+          echo "Deleting storage container if it exists..."
+          STORAGE_KEY=$(az storage account keys list --resource-group "$az_backend_rg_name" --account-name "$az_backend_sa_name" --query '[0].value' -o tsv 2>/dev/null || echo "")
+          if [ -n "$STORAGE_KEY" ]; then
+            az storage container delete \
+              --name "$az_backend_container_name" \
+              --account-name "$az_backend_sa_name" \
+              --account-key "$STORAGE_KEY" \
+              --yes || echo "Storage container may not exist or already deleted."
           else
-            echo "Resource group $az_backend_rg_name already exists."
+            echo "Storage account keys not found. Storage account may not exist."
           fi
 
-          
-          # Add a delay to ensure the resource group is created
-          sleep 30
-
-          # Create storage account if it doesn't exist
-          if ! az storage account show --name "$az_backend_sa_name" --resource-group "$az_backend_rg_name" &>/dev/null; then
-            az storage account create \
+          # Delete storage account if it exists
+          echo "Deleting storage account if it exists..."
+          if az storage account show --name "$az_backend_sa_name" --resource-group "$az_backend_rg_name" &>/dev/null; then
+            az storage account delete \
               --name "$az_backend_sa_name" \
               --resource-group "$az_backend_rg_name" \
-              --location "$az_location" \
-              --sku Standard_LRS
+              --yes
           else
-            echo "Storage account $az_backend_sa_name already exists."
+            echo "Storage account $az_backend_sa_name does not exist or already deleted."
           fi
 
+          # Delete resource group if it exists
+          echo "Deleting resource group if it exists..."
+          if [ "$(az group exists --name "$az_backend_rg_name")" = "true" ]; then
+            az group delete --name "$az_backend_rg_name" --yes --no-wait
+            echo "Resource group deletion initiated."
+          else
+            echo "Resource group $az_backend_rg_name does not exist or already deleted."
+          fi
