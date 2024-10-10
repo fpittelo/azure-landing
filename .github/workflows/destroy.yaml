@@ -16,20 +16,16 @@ jobs:
   destroy:
     name: Destroy Backend Resources
     runs-on: ubuntu-latest
+    environment: ${{ github.event.inputs.environment }}  # Use the input environment
     env:
+      ENVIRONMENT: ${{ github.event.inputs.environment }}
       PROJECT_NAME: 'azurelanding'  # Sanitized project name (no hyphens)
     steps:
       - name: Checkout code
         uses: actions/checkout@v3
 
-      - name: Set environment variable
-        id: setenv
-        run: |
-          ENVIRONMENT="${{ github.event.inputs.environment }}"
-          echo "ENVIRONMENT=$ENVIRONMENT" >> $GITHUB_ENV
-
       - name: Login to Azure using OIDC
-        uses: azure/login@v1
+        uses: azure/login@v2
         with:
           client-id: ${{ secrets.AZURE_CLIENT_ID }}
           tenant-id: ${{ secrets.AZURE_TENANT_ID }}
@@ -44,6 +40,8 @@ jobs:
 
       - name: Destroy backend resources
         run: |
+          set -e
+
           # Retrieve environment variables
           environment="${{ env.ENVIRONMENT }}"
           project_name=$(echo "${{ env.PROJECT_NAME }}" | tr '[:upper:]' '[:lower:]' | sed 's/[^a-z0-9]//g')
@@ -51,6 +49,7 @@ jobs:
           # Define variables for the backend resources
           az_backend_rg_name="${environment}-bkd-${project_name}"
           az_backend_sa_name="${environment}bkd${project_name}sa"
+          az_backend_container_name="${environment}-bkd-${project_name}-co"
           az_location="SwitzerlandNorth"
 
           # Ensure storage account name is all lowercase and meets Azure's naming requirements
@@ -58,25 +57,46 @@ jobs:
           # Truncate to 24 characters
           az_backend_sa_name=${az_backend_sa_name:0:24}
 
+          # Validate storage account name length
+          if [ ${#az_backend_sa_name} -lt 3 ]; then
+            echo "Error: Storage account name must be at least 3 characters."
+            exit 1
+          fi
+
           # Print variable values for debugging (avoid printing secrets)
-          echo "Resource Group Name to delete: $az_backend_rg_name"
-          echo "Storage Account Name to delete: $az_backend_sa_name"
+          echo "Resource Group Name: $az_backend_rg_name"
+          echo "Storage Account Name: $az_backend_sa_name"
+          echo "Container Name: $az_backend_container_name"
+
+          # Delete storage container if it exists
+          echo "Deleting storage container if it exists..."
+          STORAGE_KEY=$(az storage account keys list --resource-group "$az_backend_rg_name" --account-name "$az_backend_sa_name" --query '[0].value' -o tsv 2>/dev/null || echo "")
+          if [ -n "$STORAGE_KEY" ]; then
+            az storage container delete \
+              --name "$az_backend_container_name" \
+              --account-name "$az_backend_sa_name" \
+              --account-key "$STORAGE_KEY" \
+              --yes || echo "Storage container may not exist or already deleted."
+          else
+            echo "Storage account keys not found. Storage account may not exist."
+          fi
 
           # Delete storage account if it exists
-          if az storage account check-name --name "$az_backend_sa_name" --query 'nameAvailable' | grep -q 'false'; then
-            echo "Deleting storage account $az_backend_sa_name..."
+          echo "Deleting storage account if it exists..."
+          if az storage account show --name "$az_backend_sa_name" --resource-group "$az_backend_rg_name" &>/dev/null; then
             az storage account delete \
               --name "$az_backend_sa_name" \
               --resource-group "$az_backend_rg_name" \
               --yes
           else
-            echo "Storage account $az_backend_sa_name does not exist."
+            echo "Storage account $az_backend_sa_name does not exist or already deleted."
           fi
 
           # Delete resource group if it exists
-          if az group exists --name "$az_backend_rg_name"; then
-            echo "Deleting resource group $az_backend_rg_name..."
+          echo "Deleting resource group if it exists..."
+          if [ "$(az group exists --name "$az_backend_rg_name")" = "true" ]; then
             az group delete --name "$az_backend_rg_name" --yes --no-wait
+            echo "Resource group deletion initiated."
           else
-            echo "Resource group $az_backend_rg_name does not exist."
+            echo "Resource group $az_backend_rg_name does not exist or already deleted."
           fi
