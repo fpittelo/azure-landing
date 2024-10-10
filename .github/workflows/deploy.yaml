@@ -87,6 +87,9 @@ jobs:
           else
             echo "Resource group $az_backend_rg_name already exists."
           fi
+          
+          # Add a delay to ensure the resource group is created
+          sleep 30
 
           # Create storage account if it doesn't exist
           if ! az storage account show --name "$az_backend_sa_name" --resource-group "$az_backend_rg_name" &>/dev/null; then
