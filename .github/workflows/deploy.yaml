@@ -109,7 +109,7 @@ jobs:
     name: Deploy Landing Zone
     runs-on: ubuntu-latest
     needs: backend  # Ensure this runs after the backend job
-    environment: ${{ needs.backend.outputs.environment }}
+    environment: ${{ github.ref_name }} # Use the branch name as environment
     env:
       ENVIRONMENT: ${{ needs.backend.outputs.environment }}
       PROJECT_NAME: 'azurelanding'  # Sanitized project name (no hyphens)
