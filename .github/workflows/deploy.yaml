@@ -106,6 +106,16 @@ jobs:
             echo "Storage account $az_backend_sa_name already exists."
           fi
 
+          # **Create storage container if it doesn't exist**
+          if ! az storage container exists --name "$az_backend_container_name" --account-name "$az_backend_sa_name" --auth-mode login --query exists -o tsv | grep -q 'true'; then
+            az storage container create \
+              --name "$az_backend_container_name" \
+              --account-name "$az_backend_sa_name" \
+              --auth-mode login
+          else
+            echo "Storage container $az_backend_container_name already exists."
+          fi
+
 ############ Deployment of Landing Zone ##############
 
   deploy:
